@@ -1,0 +1,254 @@
+From ec37a179d78299ae01bea231b6051d5a74abacbe Mon Sep 17 00:00:00 2001
+From: Pingbo Wen <wengpingbo@gmail.com>
+Date: Thu, 30 Jun 2022 05:16:22 -0700
+Subject: [PATCH] fix vmwgfx & ttm compile errors
+
+Signed-off-by: Pingbo Wen <wengpingbo@gmail.com>
+---
+ arch/x86/kernel/vmlinux.lds.S            |  5 ++++-
+ drivers/gpu/drm/ttm/ttm_bo_vm.c          | 23 +++++++++-------------
+ drivers/gpu/drm/ttm/ttm_page_alloc.c     |  3 ---
+ drivers/gpu/drm/ttm/ttm_page_alloc_dma.c |  3 ---
+ drivers/gpu/drm/ttm/ttm_tt.c             |  3 ---
+ include/linux/frame.h                    | 23 ++++++++++++++++++++++
+ include/linux/reservation.h              | 25 ++++++++++++++++++++++++
+ include/uapi/linux/kernel.h              |  1 +
+ 8 files changed, 62 insertions(+), 24 deletions(-)
+ create mode 100644 include/linux/frame.h
+
+diff --git a/arch/x86/kernel/vmlinux.lds.S b/arch/x86/kernel/vmlinux.lds.S
+index 17e1e60b..8fecb223 100644
+--- a/arch/x86/kernel/vmlinux.lds.S
++++ b/arch/x86/kernel/vmlinux.lds.S
+@@ -350,7 +350,10 @@ SECTIONS
+ 
+ 	/* Sections to be discarded */
+ 	DISCARDS
+-	/DISCARD/ : { *(.eh_frame) }
++	/DISCARD/ : {
++		*(.eh_frame)
++		*(__func_stack_frame_non_standard)
++	}
+ }
+ 
+ 
+diff --git a/drivers/gpu/drm/ttm/ttm_bo_vm.c b/drivers/gpu/drm/ttm/ttm_bo_vm.c
+index 60fcef15..1309c09c 100644
+--- a/drivers/gpu/drm/ttm/ttm_bo_vm.c
++++ b/drivers/gpu/drm/ttm/ttm_bo_vm.c
+@@ -35,15 +35,14 @@
+ #include <drm/ttm/ttm_placement.h>
+ #include <drm/drm_vma_manager.h>
+ #include <linux/mm.h>
+-#include <linux/pfn_t.h>
+ #include <linux/rbtree.h>
+ #include <linux/module.h>
+ #include <linux/uaccess.h>
+-#include <linux/mem_encrypt.h>
+ 
+ #define TTM_BO_VM_NUM_PREFAULT 16
+ 
+ static int ttm_bo_vm_fault_idle(struct ttm_buffer_object *bo,
++				struct vm_area_struct *vma,
+ 				struct vm_fault *vmf)
+ {
+ 	int ret = 0;
+@@ -67,7 +66,7 @@ static int ttm_bo_vm_fault_idle(struct ttm_buffer_object *bo,
+ 			goto out_unlock;
+ 
+ 		ttm_bo_reference(bo);
+-		up_read(&vmf->vma->vm_mm->mmap_sem);
++		up_read(&vma->vm_mm->mmap_sem);
+ 		(void) dma_fence_wait(bo->moving, true);
+ 		ttm_bo_unreserve(bo);
+ 		ttm_bo_unref(&bo);
+@@ -104,9 +103,8 @@ static unsigned long ttm_bo_io_mem_pfn(struct ttm_buffer_object *bo,
+ 		+ page_offset;
+ }
+ 
+-static int ttm_bo_vm_fault(struct vm_fault *vmf)
++static int ttm_bo_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+ {
+-	struct vm_area_struct *vma = vmf->vma;
+ 	struct ttm_buffer_object *bo = (struct ttm_buffer_object *)
+ 	    vma->vm_private_data;
+ 	struct ttm_bo_device *bdev = bo->bdev;
+@@ -117,7 +115,7 @@ static int ttm_bo_vm_fault(struct vm_fault *vmf)
+ 	struct page *page;
+ 	int ret;
+ 	int i;
+-	unsigned long address = vmf->address;
++	unsigned long address = (unsigned long)vmf->virtual_address;;
+ 	int retval = VM_FAULT_NOPAGE;
+ 	struct ttm_mem_type_manager *man =
+ 		&bdev->man[bo->mem.mem_type];
+@@ -137,7 +135,7 @@ static int ttm_bo_vm_fault(struct vm_fault *vmf)
+ 		if (vmf->flags & FAULT_FLAG_ALLOW_RETRY) {
+ 			if (!(vmf->flags & FAULT_FLAG_RETRY_NOWAIT)) {
+ 				ttm_bo_reference(bo);
+-				up_read(&vmf->vma->vm_mm->mmap_sem);
++				up_read(&vma->vm_mm->mmap_sem);
+ 				(void) ttm_bo_wait_unreserved(bo);
+ 				ttm_bo_unref(&bo);
+ 			}
+@@ -181,7 +179,7 @@ static int ttm_bo_vm_fault(struct vm_fault *vmf)
+ 	 * Wait for buffer data in transit, due to a pipelined
+ 	 * move.
+ 	 */
+-	ret = ttm_bo_vm_fault_idle(bo, vmf);
++	ret = ttm_bo_vm_fault_idle(bo, vma, vmf);
+ 	if (unlikely(ret != 0)) {
+ 		retval = ret;
+ 
+@@ -248,11 +246,9 @@ static int ttm_bo_vm_fault(struct vm_fault *vmf)
+ 	 * first page.
+ 	 */
+ 	for (i = 0; i < TTM_BO_VM_NUM_PREFAULT; ++i) {
+-		if (bo->mem.bus.is_iomem) {
+-			/* Iomem should not be marked encrypted */
+-			cvma.vm_page_prot = pgprot_decrypted(cvma.vm_page_prot);
++		if (bo->mem.bus.is_iomem)
+ 			pfn = ttm_bo_io_mem_pfn(bo, page_offset);
+-		} else {
++		else {
+ 			page = ttm->pages[page_offset];
+ 			if (unlikely(!page && i == 0)) {
+ 				retval = VM_FAULT_OOM;
+@@ -267,8 +263,7 @@ static int ttm_bo_vm_fault(struct vm_fault *vmf)
+ 		}
+ 
+ 		if (vma->vm_flags & VM_MIXEDMAP)
+-			ret = vm_insert_mixed(&cvma, address,
+-					__pfn_to_pfn_t(pfn, PFN_DEV));
++			ret = vm_insert_mixed(&cvma, address, pfn);
+ 		else
+ 			ret = vm_insert_pfn(&cvma, address, pfn);
+ 
+diff --git a/drivers/gpu/drm/ttm/ttm_page_alloc.c b/drivers/gpu/drm/ttm/ttm_page_alloc.c
+index 2b12c55a..66ce8b20 100644
+--- a/drivers/gpu/drm/ttm/ttm_page_alloc.c
++++ b/drivers/gpu/drm/ttm/ttm_page_alloc.c
+@@ -51,9 +51,6 @@
+ #if IS_ENABLED(CONFIG_AGP)
+ #include <asm/agp.h>
+ #endif
+-#ifdef CONFIG_X86
+-#include <asm/set_memory.h>
+-#endif
+ 
+ #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
+ #define SMALL_ALLOCATION		16
+diff --git a/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c b/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c
+index a8805155..22d750c7 100644
+--- a/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c
++++ b/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c
+@@ -53,9 +53,6 @@
+ #if IS_ENABLED(CONFIG_AGP)
+ #include <asm/agp.h>
+ #endif
+-#ifdef CONFIG_X86
+-#include <asm/set_memory.h>
+-#endif
+ 
+ #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
+ #define SMALL_ALLOCATION		4
+diff --git a/drivers/gpu/drm/ttm/ttm_tt.c b/drivers/gpu/drm/ttm/ttm_tt.c
+index 5a046a3c..e1510fc2 100644
+--- a/drivers/gpu/drm/ttm/ttm_tt.c
++++ b/drivers/gpu/drm/ttm/ttm_tt.c
+@@ -43,9 +43,6 @@
+ #include <drm/ttm/ttm_bo_driver.h>
+ #include <drm/ttm/ttm_placement.h>
+ #include <drm/ttm/ttm_page_alloc.h>
+-#ifdef CONFIG_X86
+-#include <asm/set_memory.h>
+-#endif
+ 
+ /**
+  * Allocates storage for pointers to the pages that back the ttm.
+diff --git a/include/linux/frame.h b/include/linux/frame.h
+new file mode 100644
+index 00000000..e6baaba3
+--- /dev/null
++++ b/include/linux/frame.h
+@@ -0,0 +1,23 @@
++#ifndef _LINUX_FRAME_H
++#define _LINUX_FRAME_H
++
++#ifdef CONFIG_STACK_VALIDATION
++/*
++ * This macro marks the given function's stack frame as "non-standard", which
++ * tells objtool to ignore the function when doing stack metadata validation.
++ * It should only be used in special cases where you're 100% sure it won't
++ * affect the reliability of frame pointers and kernel stack traces.
++ *
++ * For more information, see tools/objtool/Documentation/stack-validation.txt.
++ */
++#define STACK_FRAME_NON_STANDARD(func) \
++	static void __used __section(__func_stack_frame_non_standard) \
++		*__func_stack_frame_non_standard_##func = func
++
++#else /* !CONFIG_STACK_VALIDATION */
++
++#define STACK_FRAME_NON_STANDARD(func)
++
++#endif /* CONFIG_STACK_VALIDATION */
++
++#endif /* _LINUX_FRAME_H */
+diff --git a/include/linux/reservation.h b/include/linux/reservation.h
+index 156cfd33..2dfe150b 100644
+--- a/include/linux/reservation.h
++++ b/include/linux/reservation.h
+@@ -166,6 +166,28 @@ reservation_object_lock(struct reservation_object *obj,
+ 	return ww_mutex_lock(&obj->lock, ctx);
+ }
+ 
++/**
++ * reservation_object_lock_interruptible - lock the reservation object
++ * @obj: the reservation object
++ * @ctx: the locking context
++ *
++ * Locks the reservation object interruptible for exclusive access and
++ * modification. Note, that the lock is only against other writers, readers
++ * will run concurrently with a writer under RCU. The seqlock is used to
++ * notify readers if they overlap with a writer.
++ *
++ * As the reservation object may be locked by multiple parties in an
++ * undefined order, a #ww_acquire_ctx is passed to unwind if a cycle
++ * is detected. See ww_mutex_lock() and ww_acquire_init(). A reservation
++ * object may be locked by itself by passing NULL as @ctx.
++ */
++static inline int
++reservation_object_lock_interruptible(struct reservation_object *obj,
++				      struct ww_acquire_ctx *ctx)
++{
++	return ww_mutex_lock_interruptible(&obj->lock, ctx);
++}
++
+ /**
+  * reservation_object_trylock - trylock the reservation object
+  * @obj: the reservation object
+@@ -254,6 +276,9 @@ int reservation_object_get_fences_rcu(struct reservation_object *obj,
+ 				      unsigned *pshared_count,
+ 				      struct dma_fence ***pshared);
+ 
++int reservation_object_copy_fences(struct reservation_object *dst,
++				   struct reservation_object *src);
++
+ long reservation_object_wait_timeout_rcu(struct reservation_object *obj,
+ 					 bool wait_all, bool intr,
+ 					 unsigned long timeout);
+diff --git a/include/uapi/linux/kernel.h b/include/uapi/linux/kernel.h
+index 321e3994..466073f0 100644
+--- a/include/uapi/linux/kernel.h
++++ b/include/uapi/linux/kernel.h
+@@ -9,5 +9,6 @@
+ #define __ALIGN_KERNEL(x, a)		__ALIGN_KERNEL_MASK(x, (typeof(x))(a) - 1)
+ #define __ALIGN_KERNEL_MASK(x, mask)	(((x) + (mask)) & ~(mask))
+ 
++#define __KERNEL_DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
+ 
+ #endif /* _UAPI_LINUX_KERNEL_H */
+-- 
+2.32.0
+

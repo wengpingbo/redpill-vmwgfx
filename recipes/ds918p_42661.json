@@ -1,0 +1,23 @@
+{
+  "mod_version": "v1",
+
+  "files": [
+    {
+      "name": "ttm.ko",
+      "url": "https://raw.githubusercontent.com/wengpingbo/redpill-vmwgfx/master/release/apollolake_4.4.180/ttm.ko",
+      "sha256": "7f3eee8c09b221d2591219d1fc8cec5f1d2619d1ca449d895ae8b67f5be367c9",
+      "packed": false
+    },
+    {
+      "name": "vmwgfx.ko",
+      "url": "https://raw.githubusercontent.com/wengpingbo/redpill-vmwgfx/master/release/apollolake_4.4.180/vmwgfx.ko",
+      "sha256": "52cceebadb87b05f44a80ac87cd2af261b82c150abd3061e4f1031cf544e7bf0",
+      "packed": false
+    }
+  ],
+
+  "kmods": {
+    "ttm.ko": "",
+    "vmwgfx.ko": ""
+  }
+}

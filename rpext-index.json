@@ -1,0 +1,14 @@
+{
+  "id": "vmwgfx",
+  "url": "https://raw.githubusercontent.com/wengpingbo/redpill-vmwgfx/master/rpext-index.json",
+  "info": {
+    "name": "vmwgfx",
+    "description": "DRM driver for VMware Virtual GPU",
+    "author_url": "https://github.com/wengpingbo/redpill-vmwgfx",
+    "packer_url": "https://github.com/wengpingbo/redpill-vmwgfx",
+    "help_url": "https://github.com/wengpingbo/redpill-vmwgfx"
+  },
+  "releases": {
+    "ds918p_42661": "https://raw.githubusercontent.com/wengpingbo/redpill-vmwgfx/master/recipes/ds918p_42661.json"
+  }
+}
