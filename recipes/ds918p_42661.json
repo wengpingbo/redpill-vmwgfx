@@ -3,6 +3,12 @@
 
   "files": [
     {
+      "name": "check-vmwgfx.sh",
+      "url": "https://raw.githubusercontent.com/wengpingbo/redpill-vmwgfx/master/src/check-vmwgfx.sh",
+      "sha256": "28d3b9e880a77975493dc7e359144c0295a4f694cfe0af4f928c22307bc5c320",
+      "packed": false
+    },
+    {
       "name": "ttm.ko",
       "url": "https://raw.githubusercontent.com/wengpingbo/redpill-vmwgfx/master/release/apollolake_4.4.180/ttm.ko",
       "sha256": "7f3eee8c09b221d2591219d1fc8cec5f1d2619d1ca449d895ae8b67f5be367c9",
@@ -19,5 +25,9 @@
   "kmods": {
     "ttm.ko": "",
     "vmwgfx.ko": ""
+  },
+
+  "scripts": {
+    "check_kmod": "check-vmwgfx.sh"
   }
 }
